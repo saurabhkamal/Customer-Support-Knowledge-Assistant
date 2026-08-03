@@ -43,14 +43,15 @@ class Ticket(Base):
 
 class Issue(Base):
     __tablename__ = "issues"
-
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
     description = Column(String, nullable=True)
     ticket_id = Column(Integer, ForeignKey("tickets.id"), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    ticket = relationship("Ticket")
+    embedding = Column(Vector(1536))  
+    # Add the embedding column to the Issue model
+    # so it can later be compared for similarity against a user's question
+    created_at = Column(DateTime(timezone=True), server_default=func.now()) # Timestamp auto-filled by Postgres
+    ticket = relationship("Ticket")   # Lets you write issue.ticket in Python to get the full parent Ticket object
 
 class Solution(Base):
     __tablename__ = "solutions"
@@ -86,4 +87,9 @@ class DocumentChunk(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     document = relationship("Document")
-                         
+
+
+
+
+    
+

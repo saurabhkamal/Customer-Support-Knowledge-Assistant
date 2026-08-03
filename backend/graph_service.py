@@ -114,3 +114,16 @@ def sync_document(document_id: int, title: str, content: str, product_id: int):
             content=content,
             product_id=product_id,
         )
+
+def get_solution_for_issue(issue_id: int):
+    driver = get_neo4j_driver()
+    with driver.session() as session:
+        result = session.run(
+            """
+            MATCH (i:Issue {id: $issue_id})-[:RESOLVED_BY]->(s:Solution)
+            RETURN s.description AS solution_text
+            """,
+            issue_id=issue_id
+        )
+        record = result.single()
+        return record["solution_text"] if record else None
