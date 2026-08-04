@@ -1,10 +1,9 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean
 from sqlalchemy.sql import func  # func gives access to built-in SQL functions - func.now() to auto generate the current timestamp when a row is created.
 from sqlalchemy.orm import relationship
 from database import Base  # already created in database.py; every table model must inherit from this - its what register the class with SQLAlchemy as a real table definiton
 from pgvector.sqlalchemy import Vector
-
-
+import secrets
 
 class Customer(Base):    # Customer class inheriting from base, making it a model - table blueprint
     __tablename__ = "customers"
@@ -88,6 +87,15 @@ class DocumentChunk(Base):
 
     document = relationship("Document")
 
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, nullable=False, index=True)
+    label = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 

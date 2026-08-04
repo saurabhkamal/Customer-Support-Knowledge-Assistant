@@ -129,5 +129,18 @@ class AskResponse(BaseModel):
     issue_source: Optional[str] = None
     solution_used: Optional[str] = None
 
+class ApiKeyCreate(BaseModel):
+    label: str
 
-    
+
+class ApiKeyResponse(BaseModel):
+    id: int
+    key: str
+    label: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+        

@@ -1,20 +1,29 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from database import get_db
-from models import DocumentChunk, Document 
+from models import DocumentChunk, Document, ApiKey 
 from schemas import SearchRequest, SearchResult
 from embedding_service import generate_embedding
+from auth import verify_api_key
+from rate_limiter import limiter
+
 
 router = APIRouter(prefix="/search", tags=["Search"])
 
 # POST /search/, response will be a JSON array of SearchResult objects
 @router.post("/", response_model=list[SearchResult])
-def search_documents(request: SearchRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def search_documents(
+    request: Request,
+    request_body: SearchRequest,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
     # Takes SearchRequest (query text + top_k), db = a fresh DB session
 
-    query_embedding = generate_embedding(request.query)  # convert the user's search text into its own 1536-number embedding
+    query_embedding = generate_embedding(request_body.query)  # convert the user's search text into its own 1536-number embedding
 
     results = (
         db.query(
@@ -23,7 +32,7 @@ def search_documents(request: SearchRequest, db: Session = Depends(get_db)):
             # fetch each chunk PLUS how "far" its embedding is from the query's embedding
         )
         .order_by("distance") # sort so the closest (most similar) chunks come first
-        .limit(request.top_k) # only keep the top N results
+        .limit(request_body.top_k) # only keep the top N results
         .all() # actually run the query, get back a list of (chunk, distance) pairs
     )
 

@@ -2,15 +2,21 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from graph_service import sync_product
-
 from database import get_db
-from models import Product
+from models import Product, ApiKey
 from schemas import ProductCreate, ProductResponse
+from auth import verify_api_key
+
+
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
 @router.post("/", response_model=ProductResponse)
-def create_product(product: ProductCreate, db: Session = Depends(get_db)):
+def create_product(
+    product: ProductCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
     existing = db.query(Product).filter(Product.name == product.name).first()
     if existing:
         raise HTTPException(status_code=400, detail="Product already exists")
@@ -25,5 +31,8 @@ def create_product(product: ProductCreate, db: Session = Depends(get_db)):
     return new_product
 
 @router.get("/", response_model=List[ProductResponse])
-def list_products(db: Session = Depends(get_db)):
+def list_products(
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
     return db.query(Product).all()

@@ -3,15 +3,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Issue, Ticket
+from models import Issue, Ticket, ApiKey
 from schemas import IssueCreate, IssueResponse
 from graph_service import sync_issue
 from embedding_service import generate_embedding
+from auth import verify_api_key
 
 router = APIRouter(prefix="/issues", tags=["Issues"])
 
 @router.post("/", response_model=IssueResponse)
-def create_issue(issue: IssueCreate, db: Session = Depends(get_db)):
+def create_issue(
+    issue: IssueCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
     ticket = db.query(Ticket).filter(Ticket.id == issue.ticket_id).first()
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
@@ -39,6 +44,10 @@ def create_issue(issue: IssueCreate, db: Session = Depends(get_db)):
     return new_issue
 
 @router.get("/", response_model=List[IssueResponse])
-def list_issues(db: Session = Depends(get_db)):
+def list_issues(
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
+  
     return db.query(Issue).all()
 
