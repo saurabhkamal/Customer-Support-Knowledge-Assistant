@@ -3,7 +3,7 @@ from database import engine, Base  # libraries needed to actually create tables.
 # Imports engine (Live connection to Postgres)
 # Import Base (the parent class all our models inherit from)
 import models
-from routers import customers, products, tickets, issues, solutions, documents, search, ask, api_keys
+from routers import customers, products, tickets, issues, solutions, documents, search, ask, api_keys, graph
 import time    # to measure how long each request takes
 from logging_config import logger
 
@@ -42,6 +42,7 @@ app.include_router(documents.router)
 app.include_router(search.router)
 app.include_router(ask.router)
 app.include_router(api_keys.router)
+app.include_router(graph.router)      # register all of graph.py's endpoints onto the main app. 
 
 @app.get("/health")
 def health_check():

@@ -127,3 +127,61 @@ def get_solution_for_issue(issue_id: int):
         )
         record = result.single()
         return record["solution_text"] if record else None
+
+
+def get_ticket_graph(ticket_id: int):    # takes a ticket's id, returns its full connected graph as nodes + edges
+    driver = get_neo4j_driver()     # shared Neo4j connection
+    with driver.session() as session:   # open a session to run queries, auto-closes when done
+        result = session.run(
+            """
+            MATCH (t: Ticket {id: $ticket_id})
+            OPTIONAL MATCH (c:Customer)-[:RAISED]->(t)
+            OPTIONAL MATCH (t)-[:RELATED_TO]->(p:Product)
+            OPTIONAL MATCH (t)-[:HAS_ISSUE]->(i:Issue)-[:RESOLVED_BY]->(s:Solution)
+            RETURN t, c, p, i, s
+            """,
+            ticket_id=ticket_id
+        )
+        # find the ticket, then optinally find its customer, product, issue,
+        # and issue's solution - OPTIONAL means missing pieces don't break the query
+
+        record = result.single()   # grab the one matching row (there should be at most one, per ticket id)
+
+        if not record:
+            return {"nodes": [], "edges": []}
+        # if no ticket with this id exists, return an empty graph
+
+        nodes = []
+        edges = []
+        # empty lists to collect what we find
+
+        t = record["t"]
+        nodes.append({"id": f"ticket-{t['id']}", "label": t.get("subject", "Ticket"), "type": "Ticket"})
+        # the ticket always exists (it's what we searched for) — add it as a node
+
+        c = record["c"]
+        if c:
+            nodes.append({"id": f"customer-{c['id']}", "label": c.get("name", "Customer"), "type": "Customer"})
+            edges.append({"source": f"customer-{c['id']}", "target": f"ticket-{t['id']}", "label": "RAISED"})
+        # if a customer was found, add it as a node + connect it to the ticket
+
+        p = record["p"]
+        if p:
+            nodes.append({"id": f"product-{p['id']}", "label": p.get("name", "Product"), "type": "Product"})
+            edges.append({"source": f"ticket-{t['id']}", "target": f"product-{p['id']}", "label": "RELATED_TO"})
+        # same idea, for product
+
+        i = record["i"]
+        if i:
+            nodes.append({"id": f"issue-{i['id']}", "label": i.get("title", "Issue"), "type": "Issue"})
+            edges.append({"source": f"ticket-{t['id']}", "target": f"issue-{i['id']}", "label": "HAS_ISSUE"})
+        # same idea, for issue
+
+        s = record["s"]
+        if s:
+            nodes.append({"id": f"solution-{s['id']}", "label": s.get("description", "Solution")[:50], "type": "Solution"})
+            edges.append({"source": f"issue-{i['id']}", "target": f"solution-{s['id']}", "label": "RESOLVED_BY"})
+        # same idea, for solution (text trimmed to 50 characters for display)
+
+        return {"nodes": nodes, "edges": edges}
+        # send back the full collected graph
