@@ -1,18 +1,26 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Document, Product
+from models import Document, Product, DocumentChunk, ApiKey
 from schemas import DocumentCreate, DocumentResponse
 from graph_service import sync_document
 from embedding_service import split_into_chunks, generate_embedding
-from models import DocumentChunk
+from auth import verify_api_key
+from rate_limiter import limiter
+
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
 @router.post("/", response_model=DocumentResponse)
-def create_document(document: DocumentCreate, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def create_document(
+    request: Request,
+    document: DocumentCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
     product = db.query(Product).filter(Product.id == document.product_id).first()
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -48,7 +56,10 @@ def create_document(document: DocumentCreate, db: Session = Depends(get_db)):
     return new_document
 
 @router.get("/", response_model=List[DocumentResponse])
-def list_documents(db: Session = Depends(get_db)):
+def list_documents(
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
     return db.query(Document).all()
 
 

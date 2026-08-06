@@ -104,4 +104,43 @@ class DocumentResponse(BaseModel):
     class config:
         from_attributes = True
 
-    
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = 5
+
+class SearchResult(BaseModel):
+    chunk_id: int
+    document_id: int
+    document_title: str
+    chunk_text: str
+    similarity_score: float
+
+    class Config:
+        from_attributes = True
+
+
+class AskRequest(BaseModel):
+    question: str
+
+class AskResponse(BaseModel):
+    answer: str
+    document_source: Optional[str] = None
+    issue_source: Optional[str] = None
+    solution_used: Optional[str] = None
+
+class ApiKeyCreate(BaseModel):
+    label: str
+
+
+class ApiKeyResponse(BaseModel):
+    id: int
+    key: str
+    label: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+        

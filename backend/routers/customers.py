@@ -5,12 +5,14 @@ from models import Customer
 from schemas import CustomerCreate, CustomerResponse
 from typing import List
 from graph_service import sync_customer
+from auth import verify_api_key
+from models import ApiKey
 
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
 
 @router.post("/", response_model=CustomerResponse)
-def create_customer(customer: CustomerCreate, db: Session = Depends(get_db)):
+def create_customer(customer: CustomerCreate, db: Session = Depends(get_db), api_key: ApiKey = Depends(verify_api_key)):
     existing = db.query(Customer).filter(Customer.email == customer.email).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -27,7 +29,10 @@ def create_customer(customer: CustomerCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/", response_model=List[CustomerResponse])
-def list_customers(db: Session = Depends(get_db)):
+def list_customers(
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
     customers = db.query(Customer).all()
     return customers
 
