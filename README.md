@@ -19,6 +19,50 @@ flowchart TD
 - Postgres (Supabase) and Neo4j (Aura) are fully managed cloud services — not containerized locally.
 - The backend is the only component that talks to the databases and OpenAI; the frontend only ever calls the backend's API.
 
+## Project Flow
+
+### 1. Write path — keeping Postgres and Neo4j in sync
+
+Every create/update on a core entity writes to Postgres first, then mirrors the change into Neo4j so graph traversals stay current.
+
+```mermaid
+flowchart LR
+    Client[Client] -->|"POST /tickets, /issues, ..."| API[FastAPI router]
+    API --> Auth{API key valid?}
+    Auth -->|no| Reject[401]
+    Auth -->|yes| Write[Write row via SQLAlchemy]
+    Write --> PG[("Postgres<br/>source of truth")]
+    Write --> Sync[graph_service: mirror node/relationship]
+    Sync --> Neo4j[("Neo4j<br/>graph mirror")]
+    Neo4j --> Response[Return created/updated record]
+```
+
+### 2. `/ask` — Graph RAG question answering
+
+```mermaid
+flowchart TD
+    Q["User question<br/>(POST /ask)"] --> Embed["Embed question<br/>OpenAI text-embedding-3-small"]
+    Embed --> VecDoc["Vector search: DocumentChunk<br/>(pgvector cosine distance)"]
+    Embed --> VecIssue["Vector search: Issue<br/>(pgvector cosine distance)"]
+    VecDoc --> Chunk["Closest document chunk<br/>+ parent document title"]
+    VecIssue --> IssueMatch["Closest matching Issue"]
+    IssueMatch --> Graph["Neo4j traversal:<br/>Issue -RESOLVED_BY-> Solution"]
+    Chunk --> Prompt["Assemble prompt:<br/>doc context + issue/solution context + question"]
+    Graph --> Prompt
+    Prompt --> LLM["OpenAI gpt-4o-mini"]
+    LLM --> Answer["Answer + document_source<br/>+ issue_source + solution_used"]
+```
+
+### 3. Document ingestion & embedding
+
+```mermaid
+flowchart LR
+    Upload["POST /documents/<br/>(text + product)"] --> Store["Store Document row in Postgres"]
+    Store --> Chunk["Split into chunks<br/>(embedding_service)"]
+    Chunk --> Embed["Embed each chunk<br/>OpenAI text-embedding-3-small"]
+    Embed --> Save["Store DocumentChunk rows<br/>with pgvector embeddings"]
+```
+
 ## Tech Stack
 
 | Layer | Technology |

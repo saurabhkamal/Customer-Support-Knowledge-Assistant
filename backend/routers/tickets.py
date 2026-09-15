@@ -73,4 +73,12 @@ def update_ticket(
     db.commit()
     db.refresh(ticket)
 
+    sync_ticket(
+        ticket.id,
+        ticket.subject,
+        ticket.status,
+        ticket.customer_id,
+        ticket.product_id,
+    )
+
     return ticket

@@ -1,0 +1,235 @@
+---
+name: deploy-cloud
+description: Deploy the cska Customer Support Knowledge Assistant (FastAPI backend + Next.js frontend) to AWS, Azure, or GCP using Terraform and container images. Use when asked to deploy, provision infrastructure, set up CI/CD, roll back a release, or troubleshoot a cloud environment for this project. Covers ECS Fargate/ALB, Azure Container Apps, and Cloud Run, plus GitHub Actions OIDC.
+---
+
+# Deploying cska to AWS, Azure, or GCP
+
+Read `.claude/rules/cloud-deployment.md` before acting. Those rules bind this procedure; where they
+conflict with anything below, they win.
+
+Deploy **one cloud at a time**, and **`dev` before `prod`**, always.
+
+---
+
+## Target architecture
+
+Two services, not three. nginx is a local-development concern and does not go to the cloud — every
+platform below provides ingress, TLS, and routing natively.
+
+```
+Internet → [provider ingress + managed TLS]
+             → frontend  (public, Next.js :3000)
+                  └─ route handler proxies /api/* → backend, attaching X-API-Key server-side
+             → backend   (INTERNAL INGRESS ONLY, FastAPI :8000)
+                  → Supabase Postgres · Neo4j Aura · OpenAI
+```
+
+Two non-negotiables, both verified at the end of every deploy:
+
+1. **The backend is never publicly reachable.** Only the frontend service calls it.
+2. **The API key never reaches the browser.** It is a runtime, server-only env var on the frontend.
+
+Supabase and Neo4j Aura are managed and external. They are never provisioned, migrated, or
+destroyed by this skill.
+
+---
+
+## Phase 0 — Preflight (do this every time, it is cheap)
+
+Stop and report if any check fails. Do not proceed on a partial preflight.
+
+1. **Repo is clean and current** — `git status` clean, on `main` or a deliberate feature branch,
+   synced with `origin`. Nothing deploys from uncommitted state.
+
+2. **Code blockers are resolved.** Confirm in the working tree, do not assume:
+   - Root `Dockerfile` (empty, 0 bytes) is deleted — cloud builders auto-detect it and fail.
+   - `.dockerignore` exists at root and in `frontend/`, and excludes `.env`, `venv/`,
+     `node_modules/`, `__pycache__/`, `.next/`, `backend/logs/`, `.git/`.
+     **An image containing `.env` is a secret leak — check this before any registry push.**
+   - The frontend server-side proxy exists and `NEXT_PUBLIC_API_KEY` is gone from
+     `frontend/app/lib/api.ts` and `frontend/Dockerfile`. See Known Issue #1 in CLAUDE.md.
+   - `NEO4J_URI` uses `neo4j+s://`, not `neo4j+ssc://`.
+   - `requirements.txt` BOM stripped, `slowapi` pinned.
+   - `frontend/next.config.ts` sets `output: "standalone"` and the Dockerfile is multi-stage.
+
+3. **Authenticated to the right account** — run the §1 verification command for the target cloud
+   and *show the user the account/subscription/project ID*. Deploying to the wrong account is
+   easy and expensive.
+
+4. **Secrets are staged in the cloud's secret store**, not in a tfvars file, not in the image.
+   Five backend secrets: `DATABASE_URL`, `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`,
+   `OPENAI_API_KEY`. Plus one frontend secret: the backend API key. Verify by listing names only.
+
+5. **Budget alert exists** in the target cloud. Create it before the app, not after.
+
+6. **Region chosen to match the data.** Supabase and Neo4j Aura already live in a region; every
+   `/ask` makes multiple round trips to both, so a mismatched region adds latency to every request.
+   Confirm the region with the user rather than defaulting.
+
+7. **Rollback path known** — for a redeploy, record the currently-running revision/task-definition
+   identifier before changing anything.
+
+---
+
+## Phase 1 — Build and push
+
+```bash
+TAG=$(git rev-parse --short HEAD)
+```
+
+Build both images tagged with the commit SHA. **Never deploy `:latest`** — it makes rollback
+ambiguous and makes "what is running in prod?" unanswerable.
+
+Build for `linux/amd64` explicitly. Apple Silicon and some Windows setups default to `arm64`, which
+produces an image that pulls fine and then crash-loops on an amd64 platform with an
+exec-format error that is not obvious from the logs.
+
+```bash
+docker build --platform linux/amd64 -f backend/Dockerfile  -t <registry>/cska-backend:$TAG  .
+docker build --platform linux/amd64 -f frontend/Dockerfile -t <registry>/cska-frontend:$TAG ./frontend
+```
+
+Before pushing, confirm the image does not contain `.env`:
+
+```bash
+docker run --rm <registry>/cska-backend:$TAG ls -a /app | grep -i '^\.env$' && echo "LEAK — do not push"
+```
+
+Push, then capture the immutable digest (`@sha256:...`) and deploy by digest.
+
+---
+
+## Phase 2 — Provision (Terraform)
+
+```
+infra/
+├── modules/          # shared, cloud-agnostic wiring where practical
+├── aws/{dev,prod}/
+├── azure/{dev,prod}/
+└── gcp/{dev,prod}/
+```
+
+Remote state, separate per cloud and per environment, per rule §5. Run `init` → `validate` →
+`fmt` → `plan`. **Read the plan.** A plan that destroys or replaces something unexpected is a
+🔴 stop condition, not a prompt to add `-auto-approve`.
+
+In `dev`, apply if the plan is clean. In `prod`, present the plan summary and cost delta, then wait.
+
+### AWS — ECS Fargate + ALB
+
+Chosen over App Runner because the ALB reproduces nginx's path routing natively (`/api/*` → backend
+target group, `/*` → frontend), keeping one public entry point. App Runner is one service per
+endpoint and would need CloudFront in front to route paths, which is more moving parts, not fewer.
+
+- **ECR** — two repos, scan-on-push on, lifecycle policy to expire untagged images.
+- **VPC** — 2 AZs. Public subnets for the ALB only. **Cost note:** private subnets require a NAT
+  gateway (~$32/mo each) for ECR/OpenAI egress. In `dev`, put tasks in public subnets with
+  `assign_public_ip` and no inbound security group rule — same isolation, no NAT bill. In `prod`,
+  use private subnets + a single NAT, or VPC endpoints for ECR/S3/Logs.
+- **ECS Fargate** — one service per component. Backend security group accepts traffic **only** from
+  the frontend's security group on 8000. Not from the ALB, not from the VPC CIDR.
+- **ALB** — HTTPS:443 via ACM, HTTP:80 redirecting to 443. Only the frontend target group is
+  reachable from the internet.
+- **Secrets Manager** — injected via the task definition's `secrets` block, which places them in the
+  environment at start without ever putting them in the task definition JSON.
+- **Health check** — target group path `/health`, with a startup grace period generous enough for
+  `create_all` to reach Postgres on cold start (Known Issue #5). Too short and the task is killed
+  mid-startup and crash-loops.
+- **CloudWatch Logs** — `awslogs` driver, retention set (default is never-expire, which bills forever).
+
+### Azure — Container Apps
+
+- **ACR** — Basic tier is sufficient. Build with `az acr build` to skip the local push.
+- **Container Apps Environment** — one per env, both apps inside it.
+- **Backend app** — `ingress.external = false`. It gets an internal FQDN reachable only from within
+  the environment. This single setting is what keeps the backend private; verify it after deploy.
+- **Frontend app** — `ingress.external = true`, target port 3000. Azure supplies TLS on the
+  `*.azurecontainerapps.io` hostname automatically.
+- **Key Vault** — secrets referenced via the Container App's managed identity. Grant the identity
+  `Key Vault Secrets User`, not Officer, at runtime.
+- **Scaling** — `min_replicas = 0` in dev. Set `max_replicas` explicitly; never leave it unbounded.
+- **Probes** — liveness and readiness on `/health`, with an `initialDelaySeconds` that accommodates
+  the import-time DB connection.
+
+### GCP — Cloud Run
+
+The cleanest fit of the three: Cloud Run is scale-to-zero, TLS-terminated, and private-by-default.
+
+- **Artifact Registry** — one Docker repo, e.g. `cska`.
+- **Backend service** — `--ingress internal` and `--no-allow-unauthenticated`. The frontend's
+  service account is granted `roles/run.invoker` on it and calls it with an OIDC identity token.
+  Two independent layers keeping the backend private.
+- **Frontend service** — `--allow-unauthenticated`, port 3000.
+- **Secret Manager** — mounted via `--set-secrets`. Runtime service accounts get
+  `roles/secretmanager.secretAccessor` on the specific secrets, not project-wide.
+- **Service accounts** — one per service, purpose-built. Never the default compute SA, which is
+  broadly privileged.
+- **Scaling** — `--min-instances 0` in dev, `--max-instances` always set.
+- **Startup probe** on `/health` with a raised failure threshold, again for the import-time DB connect.
+
+---
+
+## Phase 3 — Verify
+
+The deploy is **not done** until all seven pass. Report each explicitly.
+
+1. `GET https://<frontend-url>/` returns 200 over HTTPS.
+2. `GET /health` on the backend returns `{"status":"ok"}` — reached *through* the frontend or from
+   inside the network, never from a public backend URL.
+3. **The backend is not publicly reachable.** Attempt to curl the backend's direct URL from outside.
+   It must fail — connection refused, 403, or DNS not resolving. **If it returns 200, the deploy is
+   a security failure: roll back immediately.**
+4. **No API key in the client bundle.** Fetch the deployed frontend's JS and grep for the key
+   prefix. Any match means Known Issue #1 has regressed — roll back.
+5. One authenticated end-to-end path works: load a record list; confirm Postgres is reached.
+6. One `/ask` call returns a grounded answer — this exercises pgvector, Neo4j, and OpenAI together,
+   and is the only check that proves all three external dependencies are wired correctly.
+7. Logs are clean for 2 minutes, and no container is restarting. A crash-loop can look like a
+   working deploy for the first 30 seconds.
+
+---
+
+## Phase 4 — CI/CD (GitHub Actions, OIDC)
+
+Use **OIDC federation** in every cloud. Do not store long-lived cloud keys in GitHub secrets — a
+leaked repo secret is a permanent credential; an OIDC token is short-lived and scoped.
+
+- AWS — IAM OIDC provider + role with trust policy on `token.actions.githubusercontent.com`
+- Azure — workload identity federation on an app registration
+- GCP — Workload Identity Federation pool + provider
+
+Scope the trust policy to **this repo and specific branch/environment**. A trust policy scoped to
+`repo:*` lets any repository in the org assume the role.
+
+Pipeline: lint/test → build → push by SHA → deploy `dev` → verify (Phase 3) → **manual approval
+gate** → deploy `prod` → verify. Use a GitHub Environment with required reviewers for the prod gate;
+that gate is the enforcement of rule §3, so it is not optional.
+
+---
+
+## Rollback
+
+Know the previous revision before deploying. All three platforms roll back by pointing at the
+prior immutable revision — which only works because images are tagged by digest, not `:latest`.
+
+- **AWS** — re-register/roll to the previous task definition revision and update the service.
+- **Azure** — `az containerapp revision activate` on the prior revision; deactivate the bad one.
+- **GCP** — `gcloud run services update-traffic --to-revisions=<prev>=100`.
+
+Roll back first, diagnose second. Do not debug a broken deploy while it is serving traffic.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| Container starts then exits immediately | `create_all` at import can't reach Postgres (Known Issue #5); or Supabase is not accepting the cloud egress IP |
+| `exec format error` | Image built for arm64 — rebuild with `--platform linux/amd64` |
+| Health check fails but the app logs look fine | Grace period too short for the import-time DB connect; the platform kills it mid-startup |
+| Neo4j TLS handshake failures | `neo4j+ssc://` left in config, or Aura not reachable from this egress — fix properly, do not downgrade to `ssc` |
+| Frontend loads, all API calls 401 | Proxy route handler isn't attaching `X-API-Key`, or the key was rotated in the store but the revision wasn't restarted |
+| Frontend loads, API calls 404/502 | Backend internal DNS name wrong, or frontend SA lacks `run.invoker` (GCP) / SG rule missing (AWS) |
+| Works in dev, fails in prod | Nearly always a secret present in dev's store but missing in prod's |
+| Sudden OpenAI spend | Check Known Issue #1 — an exposed key is the most likely cause |

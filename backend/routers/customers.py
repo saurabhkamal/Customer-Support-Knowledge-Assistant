@@ -1,12 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Customer
+from models import Customer, ApiKey
 from schemas import CustomerCreate, CustomerResponse
 from typing import List
 from graph_service import sync_customer
 from auth import verify_api_key
-from models import ApiKey
 
 
 router = APIRouter(prefix="/customers", tags=["Customers"])

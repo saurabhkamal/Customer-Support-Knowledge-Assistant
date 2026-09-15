@@ -1,5 +1,4 @@
-from fastapi import Header, HTTPException, Depends, Security
-# Header reads the value from the request's HTTP headers
+from fastapi import HTTPException, Depends, Security
 # HTTPException: returns a proper error response
 # Depends: FastAPI's dependency injection tool
 

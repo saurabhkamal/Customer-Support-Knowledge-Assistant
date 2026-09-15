@@ -1,6 +1,6 @@
 # Writing schemas.py for customer
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr
 from datetime import datetime
 from typing import Optional
 
@@ -16,8 +16,7 @@ class CustomerResponse(BaseModel):
     email: EmailStr
     created_at: datetime
 
-    class config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ProductCreate(BaseModel):
@@ -30,8 +29,7 @@ class ProductResponse(BaseModel):
     description: str | None
     created_at: datetime
 
-    class config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TicketCreate(BaseModel):
@@ -56,8 +54,7 @@ class TicketResponse(BaseModel):
     product_id: Optional[int]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class IssueCreate(BaseModel):
@@ -72,8 +69,7 @@ class IssueResponse(BaseModel):
     ticket_id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SolutionCreate(BaseModel):
     description: str
@@ -85,8 +81,7 @@ class SolutionResponse(BaseModel):
     issue_id: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DocumentCreate(BaseModel):
     title: str
@@ -101,8 +96,7 @@ class DocumentResponse(BaseModel):
     product_id: int
     created_at: datetime
 
-    class config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SearchRequest(BaseModel):
@@ -116,8 +110,7 @@ class SearchResult(BaseModel):
     chunk_text: str
     similarity_score: float
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AskRequest(BaseModel):
@@ -140,7 +133,6 @@ class ApiKeyResponse(BaseModel):
     is_active: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
         

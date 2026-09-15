@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 
 from database import get_db
 from models import DocumentChunk, Document, ApiKey 

@@ -3,7 +3,6 @@ from sqlalchemy.sql import func  # func gives access to built-in SQL functions -
 from sqlalchemy.orm import relationship
 from database import Base  # already created in database.py; every table model must inherit from this - its what register the class with SQLAlchemy as a real table definiton
 from pgvector.sqlalchemy import Vector
-import secrets
 
 class Customer(Base):    # Customer class inheriting from base, making it a model - table blueprint
     __tablename__ = "customers"
