@@ -7,11 +7,8 @@ RUN npm ci
 
 COPY . .
 
-ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_API_KEY
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_KEY=$NEXT_PUBLIC_API_KEY
-
+# No build args: BACKEND_URL and BACKEND_API_KEY are read at runtime by the
+# /api proxy route, so no secret is baked into the image or the bundle.
 RUN npm run build
 
 EXPOSE 3000

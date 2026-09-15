@@ -37,12 +37,16 @@ Backend (all required, read via `os.getenv` at import time):
 - `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD` — Neo4j Aura
 - `OPENAI_API_KEY`
 
-Frontend build args (baked at image build time, not runtime):
+Frontend, **server-side only, read at runtime** by `app/api/[...path]/route.ts`:
 
-- `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_KEY` — **see Known Issue #1; this is being removed**
+- `BACKEND_URL` — internal address of the backend, e.g. `http://backend:8000`
+- `BACKEND_API_KEY` — the key the proxy attaches as `X-API-Key`
 
-There is no `config.py` content — it is an empty file. Env reading is scattered across
-`backend/database.py`, `backend/graph_database.py`, and `backend/routers/ask.py`.
+Never prefix either with `NEXT_PUBLIC_`. That inlines the value into the browser bundle — the bug
+described in the FIXED section below. There are no frontend build args any more.
+
+Env reading is scattered across `backend/database.py`, `backend/graph_database.py`, and
+`backend/routers/ask.py` rather than centralised.
 
 ## Local commands
 
@@ -78,8 +82,8 @@ The backend must **not** be publicly reachable. The frontend's Next.js server is
 and it holds the API key server-side.
 
 This shape is identical across AWS, Azure, and GCP, which keeps the three deployments comparable
-and keeps the Terraform modules structurally parallel. It also fixes Known Issue #1 as a
-side effect rather than as a separate patch.
+and keeps the Terraform modules structurally parallel. The server-side proxy that makes it work is
+already implemented — see the FIXED section below.
 
 ---
 
@@ -87,39 +91,28 @@ side effect rather than as a separate patch.
 
 Fix these before the first public deploy. They are listed in priority order.
 
-### 1. The backend API key is exposed to the public internet — CRITICAL
+### ✅ FIXED — API key exposure and open key minting (both were CRITICAL)
 
-`frontend/app/lib/api.ts` reads `process.env.NEXT_PUBLIC_API_KEY`. Next.js inlines every
-`NEXT_PUBLIC_*` variable into the JavaScript bundle sent to the browser. `frontend/Dockerfile`
-bakes it in at build time via `ARG`/`ENV`, so it is also embedded in the image layers.
+Resolved 2026-09-15; recorded here because the shape of the fix constrains future changes.
 
-Consequence once deployed to a public URL: anyone can open DevTools, read the key, and call the
-API directly — draining OpenAI credits and reading/writing the Postgres and Neo4j data. Rate
-limiting does not help; `slowapi` limits per IP, and an attacker rotates IPs.
+The key used to reach the browser via `NEXT_PUBLIC_API_KEY`, and `POST /api-keys/` used to accept
+unauthenticated requests — together, a fully self-serve public API.
 
-Fix: move the call server-side. Add a Next.js route handler (e.g. `app/api/[...path]/route.ts`)
-that forwards to the backend and attaches `X-API-Key` from a **server-only** env var (no
-`NEXT_PUBLIC_` prefix, injected at runtime, not build time). `apiFetch` then calls the relative
-path `/api/...` with no key at all. The key never reaches the browser or the image.
+Now: `app/api/[...path]/route.ts` proxies every call server-side and attaches `X-API-Key` from
+`BACKEND_API_KEY`; `apiFetch` sends no credentials. `create_api_key` requires a valid existing key,
+and the first key is minted out-of-band by `backend/scripts/create_first_key.py`.
 
-Treat the current key as compromised the moment it is deployed — rotate it via `POST /api-keys/`
-and deactivate the old one.
+Three things must not regress:
 
-### 2. `POST /api-keys/` requires no authentication — CRITICAL
+- **Never reintroduce a `NEXT_PUBLIC_` variable for anything secret.** Verify on every deploy by
+  grepping the served bundle — `grep -r "<key prefix>" .next/static` must return nothing.
+- **`next.config.ts` sets `skipTrailingSlashRedirect: true`.** Without it Next 308-redirects
+  `/api/customers/` to `/api/customers` before the proxy runs, and FastAPI defines its collection
+  routes *with* the trailing slash. Removing that line silently adds a redirect hop to every call.
+- **nginx must not route `/api/` to the backend.** It was removed for exactly this reason; adding
+  it back bypasses the proxy and re-exposes the backend.
 
-`routers/api_keys.py::create_api_key` has no `verify_api_key` dependency. Anyone who can reach the
-backend can mint themselves a valid, active API key and then call every other endpoint.
-
-This makes the entire API-key scheme ineffective if the backend is ever publicly reachable, and it
-is strictly worse than a leaked key: rotating keys does not help, because an attacker simply mints
-a new one. It is also why the backend-internal-only architecture above is a hard requirement rather
-than a nicety.
-
-Fix before public deploy: require an existing valid key to create another (`Depends(verify_api_key)`),
-and bootstrap the very first key out-of-band — a one-off script run against the DB, not an open
-endpoint.
-
-### 3. Both external databases are currently unreachable — BLOCKER
+### 1. Both external databases are currently unreachable — BLOCKER
 
 Verified 2026-09-15. Nothing can be deployed or tested until these are restored:
 
@@ -129,27 +122,27 @@ Verified 2026-09-15. Nothing can be deployed or tested until these are restored:
 - **Neo4j Aura** — `6b0cab3d.databases.neo4j.io` returns NXDOMAIN. Aura Free pauses after 3 days
   idle and is **deleted** after 30. A non-resolving host suggests deletion, not a pause.
 
-The backend cannot start in this state: `create_all` runs at import (see #5) and will raise
+The backend cannot start in this state: `create_all` runs at import (see #4) and will raise
 `OperationalError`. Note the Supabase region was `ap-northeast-1` (Tokyo) — pick the cloud region
 to match whatever the restored instances use.
 
-### 4. CORS origins are hardcoded to localhost
+### 2. CORS origins are hardcoded to localhost
 
 `main.py` sets `allow_origins=["http://localhost:3000", "http://localhost"]`. Any deployed frontend
 on a real hostname will be blocked. Make it env-driven before deploying.
 
-Note this becomes largely moot once Known Issue #1 is fixed: with the Next.js server-side proxy the
-browser only ever calls its own origin, so there is no cross-origin request to authorize. Do not
-"fix" it by setting `allow_origins=["*"]` — combined with #2 that is a fully open API.
+This is now largely moot: with the server-side proxy in place the browser only ever calls its own
+origin, so there is no cross-origin request to authorize. Still make it env-driven rather than
+leaving localhost hardcoded — and never "fix" it with `allow_origins=["*"]`.
 
-### 5. `neo4j+ssc://` disables TLS certificate verification
+### 3. `neo4j+ssc://` disables TLS certificate verification
 
 `.env.example` uses `neo4j+ssc://` with a comment noting it works around a local network/TLS issue.
 `ssc` = "self-signed certificate" — it encrypts but does not verify the server identity, so it is
 vulnerable to man-in-the-middle. Use `neo4j+s://` in all cloud environments. If it fails there,
 that is a real problem to diagnose, not to work around.
 
-### 6. Schema creation runs at import time
+### 4. Schema creation runs at import time
 
 `backend/main.py` calls `Base.metadata.create_all(bind=engine)` at module import. Every cold start
 and every new autoscaled task connects to Postgres and attempts DDL before serving traffic. If the
@@ -160,19 +153,19 @@ For now this is tolerated, but it means: **cold starts require DB reachability**
 generous startup probe / health check grace periods. Longer term this belongs in Alembic migrations
 run as a one-off job.
 
-### 7. `requirements.txt` hygiene
+### 5. `requirements.txt` hygiene
 
 The file begins with a UTF-8 BOM (`\ufeff` before `annotated-doc`), which some `pip` versions
 choke on. `slowapi` is unpinned, so builds are not reproducible. `psycopg2-binary` is used — fine
 for now, but `psycopg[binary]` is the maintained path.
 
-### 8. Next.js image is not optimized for containers
+### 6. Next.js image is not optimized for containers
 
 `frontend/next.config.ts` is empty. Setting `output: "standalone"` and using a multi-stage build
 cuts the image from roughly 1 GB to under 200 MB. On scale-to-zero platforms (Cloud Run,
 Container Apps) image size directly drives cold-start latency and you pay for the pull.
 
-### 9. No tests, and `npm run lint` fails
+### 7. No tests, and `npm run lint` fails
 
 There are zero automated tests — the `backend/tests/` package contained only an empty
 `__init__.py` and has been removed. Every verification so far has been manual. Any CI pipeline

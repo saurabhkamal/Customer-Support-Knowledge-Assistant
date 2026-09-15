@@ -13,9 +13,14 @@ router = APIRouter(prefix="/api-keys", tags=["API Keys"])
 # Every endpoint below starts with /api-keys
 
 @router.post("/", response_model=ApiKeyResponse)    # handles POST /api-keys/, response shaped as ApiKeyResponse
-def create_api_key(request: ApiKeyCreate, db: Session = Depends(get_db)):
-    # request = validated {label}; db = fresh database session
-    
+def create_api_key(
+    request: ApiKeyCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(verify_api_key),
+):
+    # Minting a key requires already holding a valid one. The very first key is
+    # created out-of-band by scripts/create_first_key.py, never over HTTP.
+
     new_key = ApiKey(
         key=secrets.token_urlsafe(32),
         label=request.label,

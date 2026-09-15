@@ -1,12 +1,11 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY;
+// Calls go to this app's own /api/* route handler, which attaches the backend
+// API key server-side. No credentials are present in client code.
 
 export async function apiFetch(path: string, options: RequestInit = {}) {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`/api${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      "X-API-Key": API_KEY || "",
       ...options.headers,
     },
   });

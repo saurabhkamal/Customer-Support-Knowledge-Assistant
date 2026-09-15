@@ -47,8 +47,10 @@ Stop and report if any check fails. Do not proceed on a partial preflight.
    - `.dockerignore` exists at root and in `frontend/`, and excludes `.env`, `venv/`,
      `node_modules/`, `__pycache__/`, `.next/`, `backend/logs/`, `.git/`.
      **An image containing `.env` is a secret leak — check this before any registry push.**
-   - The frontend server-side proxy exists and `NEXT_PUBLIC_API_KEY` is gone from
-     `frontend/app/lib/api.ts` and `frontend/Dockerfile`. See Known Issue #1 in CLAUDE.md.
+   - The frontend server-side proxy is intact: `app/api/[...path]/route.ts` exists, no
+     `NEXT_PUBLIC_` secret anywhere, `next.config.ts` still sets `skipTrailingSlashRedirect: true`,
+     and nginx does not route `/api/` to the backend. See the FIXED section in CLAUDE.md.
+   - `BACKEND_URL` and `BACKEND_API_KEY` are set as **runtime** env on the frontend service.
    - `NEO4J_URI` uses `neo4j+s://`, not `neo4j+ssc://`.
    - `requirements.txt` BOM stripped, `slowapi` pinned.
    - `frontend/next.config.ts` sets `output: "standalone"` and the Dockerfile is multi-stage.

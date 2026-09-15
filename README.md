@@ -152,13 +152,28 @@ cp ../.env.example ../.env     # then fill in real credentials
 uvicorn main:app --reload
 ```
 
+Verify the three external dependencies, and mint the first API key:
+
+```bash
+python scripts/healthcheck.py            # read-only; non-zero exit if anything is unreachable
+python scripts/create_first_key.py "local dev"
+```
+
+`POST /api-keys/` requires an existing valid key, so the first one must be created with that
+script rather than over HTTP.
+
 **Frontend:**
 ```bash
 cd frontend
 npm install
-# create .env.local with NEXT_PUBLIC_API_URL and NEXT_PUBLIC_API_KEY
+# create .env.local with:
+#   BACKEND_URL=http://127.0.0.1:8000
+#   BACKEND_API_KEY=<the key printed above>
 npm run dev
 ```
+
+Both are server-side only. Never prefix them with `NEXT_PUBLIC_` — that would inline the key into
+the JavaScript bundle sent to the browser.
 
 ### With Docker
 
