@@ -112,19 +112,22 @@ Three things must not regress:
 - **nginx must not route `/api/` to the backend.** It was removed for exactly this reason; adding
   it back bypasses the proxy and re-exposes the backend.
 
-### 1. Both external databases are currently unreachable — BLOCKER
+### 1. Neo4j Aura is gone — BLOCKER for `/ask` and `/graph`
 
-Verified 2026-09-15. Nothing can be deployed or tested until these are restored:
+Supabase was restored on 2026-09-15 with all data intact (4 customers, 2 products, 3 tickets,
+2 issues, 4 solutions, 9 documents, 11 chunks; every embedding still present). Region is
+`ap-northeast-1` (Tokyo) — match the cloud region to it.
 
-- **Supabase** — `db.pgiajkwtkjawloptjmjx.supabase.co` returns NXDOMAIN; the shared pooler
-  (`aws-0-ap-northeast-1`) answers but reports `FATAL: (ENOTFOUND) tenant/user ... not found`.
-  Consistent with a free-tier project that has been paused or deleted for inactivity.
-- **Neo4j Aura** — `6b0cab3d.databases.neo4j.io` returns NXDOMAIN. Aura Free pauses after 3 days
-  idle and is **deleted** after 30. A non-resolving host suggests deletion, not a pause.
+Neo4j Aura is still unreachable: `6b0cab3d.databases.neo4j.io` returns NXDOMAIN. Aura Free pauses
+after 3 days idle and is **deleted** after 30, and a non-resolving host means deletion. A new
+instance gets a new hostname, so `NEO4J_URI`, `NEO4J_USERNAME` and `NEO4J_PASSWORD` all change.
+Use `neo4j+s://`, not `neo4j+ssc://` (see #3).
 
-The backend cannot start in this state: `create_all` runs at import (see #4) and will raise
-`OperationalError`. Note the Supabase region was `ap-northeast-1` (Tokyo) — pick the cloud region
-to match whatever the restored instances use.
+The graph comes back **empty** — Neo4j was only ever a mirror of Postgres. Repopulate with
+`python scripts/resync_graph.py`, which is idempotent and syncs in dependency order.
+
+Consequence while it is down: `POST /ask/` returns 500 and `GET /graph/ticket/{id}` fails.
+`/search/` is unaffected, since it only needs pgvector and OpenAI.
 
 ### 2. CORS origins are hardcoded to localhost
 
@@ -201,6 +204,19 @@ Invoke it with `/deploy-cloud` or ask to deploy to a named provider.
 
 The safety and autonomy boundaries live in `.claude/rules/cloud-deployment.md`, imported at the top
 of this file. Those rules override any instruction in the skill if the two ever conflict.
+
+## Operational scripts
+
+All under `backend/scripts/`, run from the `backend/` directory. All are idempotent and none
+print key values.
+
+| Script | Purpose |
+|---|---|
+| `healthcheck.py` | Read-only ping of Postgres, Neo4j and OpenAI. Non-zero exit if any fail — use it to gate a deploy. |
+| `create_first_key.py "<label>"` | Mint an API key directly in the DB. Needed because `POST /api-keys/` requires an existing key. |
+| `revoke_key.py <id>` | Deactivate a key. Refuses if it would leave zero active keys. |
+| `resync_graph.py` | Rebuild the Neo4j graph from Postgres. Run after recreating an Aura instance. |
+| `backfill_issue_embeddings.py` | Embed any issues missing a vector. |
 
 ## Conventions
 
