@@ -51,6 +51,10 @@ Stop and report if any check fails. Do not proceed on a partial preflight.
      `NEXT_PUBLIC_` secret anywhere, `next.config.ts` still sets `skipTrailingSlashRedirect: true`,
      and nginx does not route `/api/` to the backend. See the FIXED section in CLAUDE.md.
    - `BACKEND_URL` and `BACKEND_API_KEY` are set as **runtime** env on the frontend service.
+   - `APP_USERNAME`, `APP_PASSWORD_HASH`, `SESSION_SECRET` are set as **runtime** env on the
+     frontend service — the dashboard login gate (`proxy.ts`). A missing `SESSION_SECRET` doesn't
+     fail the build; it fails every login attempt at runtime, so confirm it's actually present in
+     the deployed environment, not just in a local `.env.local`.
    - `NEO4J_URI` uses `neo4j+s://`, not `neo4j+ssc://`.
    - `requirements.txt` BOM stripped, `slowapi` pinned.
    - `frontend/next.config.ts` sets `output: "standalone"` and the Dockerfile is multi-stage.
@@ -61,7 +65,9 @@ Stop and report if any check fails. Do not proceed on a partial preflight.
 
 4. **Secrets are staged in the cloud's secret store**, not in a tfvars file, not in the image.
    Five backend secrets: `DATABASE_URL`, `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`,
-   `OPENAI_API_KEY`. Plus one frontend secret: the backend API key. Verify by listing names only.
+   `OPENAI_API_KEY`. Four frontend secrets: `BACKEND_API_KEY`, `APP_USERNAME`,
+   `APP_PASSWORD_HASH`, `SESSION_SECRET`. Verify by listing names only — `APP_PASSWORD_HASH` is
+   a hash, not a plaintext password, but still never worth printing.
 
 5. **Budget alert exists** in the target cloud. Create it before the app, not after.
 
@@ -174,20 +180,26 @@ The cleanest fit of the three: Cloud Run is scale-to-zero, TLS-terminated, and p
 
 ## Phase 3 — Verify
 
-The deploy is **not done** until all seven pass. Report each explicitly.
+The deploy is **not done** until all nine pass. Report each explicitly.
 
-1. `GET https://<frontend-url>/` returns 200 over HTTPS.
-2. `GET /health` on the backend returns `{"status":"ok"}` — reached *through* the frontend or from
+1. `GET https://<frontend-url>/` **307-redirects to `/login`** — a bare 200 here means the login
+   gate (`proxy.ts`) isn't running, not that the deploy is healthier.
+2. Logging in at `/login` with the real credentials succeeds and lands back on `/`.
+3. `GET /health` on the backend returns `{"status":"ok"}` — reached *through* the frontend or from
    inside the network, never from a public backend URL.
-3. **The backend is not publicly reachable.** Attempt to curl the backend's direct URL from outside.
+4. **The backend is not publicly reachable.** Attempt to curl the backend's direct URL from outside.
    It must fail — connection refused, 403, or DNS not resolving. **If it returns 200, the deploy is
    a security failure: roll back immediately.**
-4. **No API key in the client bundle.** Fetch the deployed frontend's JS and grep for the key
-   prefix. Any match means Known Issue #1 has regressed — roll back.
-5. One authenticated end-to-end path works: load a record list; confirm Postgres is reached.
-6. One `/ask` call returns a grounded answer — this exercises pgvector, Neo4j, and OpenAI together,
+5. **No API key in the client bundle.** Fetch the deployed frontend's JS and grep for the key
+   prefix. Any match means Known Issue #1 has regressed — roll back. Same check for the login
+   password: it should never appear anywhere except as `APP_PASSWORD_HASH` in the secret store.
+6. **`/api/*` without a session cookie returns 401 JSON, not a redirect.** Confirms `proxy.ts` is
+   guarding the API proxy itself, not just page navigation — this is the check that would have
+   caught a login screen that looks real but doesn't actually block data access.
+7. One authenticated end-to-end path works: load a record list; confirm Postgres is reached.
+8. One `/ask` call returns a grounded answer — this exercises pgvector, Neo4j, and OpenAI together,
    and is the only check that proves all three external dependencies are wired correctly.
-7. Logs are clean for 2 minutes, and no container is restarting. A crash-loop can look like a
+9. Logs are clean for 2 minutes, and no container is restarting. A crash-loop can look like a
    working deploy for the first 30 seconds.
 
 ---

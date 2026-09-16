@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { apiFetch } from "../lib/api";
+import { apiFetch } from "../../lib/api";
 
 type Document = {
   id: number;
@@ -15,6 +15,8 @@ type Product = {
   id: number;
   name: string;
 };
+
+const inputStyle = { borderColor: "var(--border)" };
 
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -67,39 +69,51 @@ export default function DocumentsPage() {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-6">Documents</h1>
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold text-slate-900">Documents</h1>
+        <p className="text-slate-500 text-sm mt-1">
+          Upload manuals and FAQs — automatically chunked and embedded for search.
+        </p>
+      </div>
 
-      <form onSubmit={handleSubmit} className="border border-gray-200 rounded-lg p-5 mb-10">
-        <h2 className="font-semibold mb-4">Add a new document</h2>
+      <form
+        onSubmit={handleSubmit}
+        className="bg-white border rounded-xl p-5 mb-10"
+        style={{ borderColor: "var(--border)" }}
+      >
+        <h2 className="font-semibold text-slate-900 text-sm mb-4">Add a new document</h2>
 
         <div className="mb-4">
-          <label className="block text-sm text-gray-500 mb-1">Title</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1.5">Title</label>
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             required
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            className="w-full border rounded-lg px-3.5 py-2.5 text-sm outline-none"
+            style={inputStyle}
           />
         </div>
 
         <div className="mb-4">
-          <label className="block text-sm text-gray-500 mb-1">Content</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1.5">Content</label>
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
             required
             rows={5}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            className="w-full border rounded-lg px-3.5 py-2.5 text-sm outline-none resize-y"
+            style={inputStyle}
           />
         </div>
 
-        <div className="mb-4">
-          <label className="block text-sm text-gray-500 mb-1">Product</label>
+        <div className="mb-5">
+          <label className="block text-xs font-medium text-slate-500 mb-1.5">Product</label>
           <select
             value={productId}
             onChange={(e) => setProductId(e.target.value)}
             required
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            className="w-full border rounded-lg px-3.5 py-2.5 text-sm outline-none bg-white"
+            style={inputStyle}
           >
             <option value="">Select a product</option>
             {products.map((p) => (
@@ -113,22 +127,39 @@ export default function DocumentsPage() {
         <button
           type="submit"
           disabled={submitting}
-          className="bg-black text-white px-4 py-2 rounded text-sm disabled:opacity-50"
+          className="text-white px-5 py-2.5 rounded-lg text-sm font-medium disabled:opacity-50"
+          style={{ background: "var(--accent)" }}
         >
           {submitting ? "Processing..." : "Create Document"}
         </button>
 
-        {message && <p className="text-sm mt-3">{message}</p>}
+        {message && (
+          <p
+            className="text-sm mt-3 font-medium"
+            style={{
+              color: message.startsWith("Failed") ? "var(--warning)" : "var(--success)",
+            }}
+          >
+            {message}
+          </p>
+        )}
       </form>
 
-      <h2 className="font-semibold mb-3">Existing documents</h2>
-      {loading && <p className="text-gray-500">Loading...</p>}
+      <h2 className="font-semibold text-slate-900 text-sm mb-3">
+        Existing documents
+        {!loading && <span className="text-slate-400 font-normal"> · {documents.length}</span>}
+      </h2>
+      {loading && <p className="text-slate-500 text-sm">Loading…</p>}
       {!loading && (
         <ul className="space-y-3">
           {documents.map((doc) => (
-            <li key={doc.id} className="border border-gray-200 rounded-lg p-4">
-              <h3 className="font-medium">{doc.title}</h3>
-              <p className="text-gray-500 text-sm mt-1 line-clamp-2">{doc.content}</p>
+            <li
+              key={doc.id}
+              className="bg-white border rounded-xl p-4"
+              style={{ borderColor: "var(--border)" }}
+            >
+              <h3 className="font-medium text-slate-900 text-sm">{doc.title}</h3>
+              <p className="text-slate-500 text-sm mt-1 line-clamp-2">{doc.content}</p>
             </li>
           ))}
         </ul>

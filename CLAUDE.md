@@ -42,8 +42,17 @@ Frontend, **server-side only, read at runtime** by `app/api/[...path]/route.ts`:
 - `BACKEND_URL` — internal address of the backend, e.g. `http://backend:8000`
 - `BACKEND_API_KEY` — the key the proxy attaches as `X-API-Key`
 
-Never prefix either with `NEXT_PUBLIC_`. That inlines the value into the browser bundle — the bug
-described in the FIXED section below. There are no frontend build args any more.
+Frontend dashboard login, **server-side only**, read by `proxy.ts` and `app/api/auth/*`:
+
+- `APP_USERNAME` — the single login username (not secret)
+- `APP_PASSWORD_HASH` — `scrypt` hash as `salt:hash`, never a plaintext password. Generate with
+  `cd frontend && node scripts/generate-password-hash.mjs`, which prompts locally so the real
+  password never leaves the machine or enters a chat transcript.
+- `SESSION_SECRET` — signs the login cookie. Generate with
+  `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+
+Never prefix any of these with `NEXT_PUBLIC_`. That inlines the value into the browser bundle — the
+bug described in the FIXED section below. There are no frontend build args any more.
 
 Env reading is scattered across `backend/database.py`, `backend/graph_database.py`, and
 `backend/routers/ask.py` rather than centralised.
@@ -58,6 +67,32 @@ cd frontend && npm run dev         # frontend alone at :3000
 
 Health check: `GET /health` on the backend returns `{"status": "ok"}`. It requires no API key and
 does not touch the database — safe for cloud load balancer probes.
+
+## Dashboard login
+
+Added 2026-09-16, separate from `BACKEND_API_KEY` above: that key authenticates the frontend to
+the backend, this gates a human into the frontend at all. Single hardcoded username, no signup —
+appropriate for a one-operator console, not a multi-tenant product.
+
+`proxy.ts` (Next's replacement for `middleware.ts` — the old convention is removed, not just
+deprecated, as of this Next version) runs before every request. `/login` and `/api/auth/*` stay
+open; everything else needs a valid session cookie. A page request without one 307-redirects to
+`/login?next=<path>`; an `/api/*` request without one gets a JSON 401 instead of a redirect, since
+it's called via `fetch` and can't follow one meaningfully.
+
+The session is a **stateless, HMAC-signed cookie** (`app/lib/auth.ts`), not a server-side session
+store. Deliberate: an in-memory store would not be shared across autoscaled instances on Cloud Run
+or Container Apps, or survive a cold start. Trade-off worth knowing: **logout cannot revoke the
+token itself**, only clear the browser's copy of it — a captured token stays valid for the rest of
+its 8-hour life (`SESSION_MAX_AGE` in `app/lib/auth.ts`) regardless. Fine for a single-operator
+local/demo tool; would need a real revocation list before this became multi-user.
+
+The login cookie is `Secure` whenever `NODE_ENV=production` (which `next start` sets on its own).
+Browsers treat `localhost` as a secure context and allow this over plain HTTP, so local dev and
+`docker compose` on `http://localhost` both work. It will **silently fail to be set** if the app is
+ever reached over plain HTTP through a non-localhost hostname (a LAN IP, a pre-TLS cloud URL) —
+every cloud target in this repo terminates TLS at the platform, so this should not occur, but if
+login mysteriously does nothing, check for HTTP on a real hostname first.
 
 ---
 

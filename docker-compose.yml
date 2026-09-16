@@ -16,6 +16,9 @@ services:
     environment:
       BACKEND_URL: http://backend:8000
       BACKEND_API_KEY: ${BACKEND_API_KEY}
+      APP_USERNAME: ${APP_USERNAME}
+      APP_PASSWORD_HASH: ${APP_PASSWORD_HASH}
+      SESSION_SECRET: ${SESSION_SECRET}
     expose:
       - "3000"
     depends_on:
