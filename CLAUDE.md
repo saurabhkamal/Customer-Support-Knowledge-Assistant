@@ -173,12 +173,27 @@ This is now largely moot: with the server-side proxy in place the browser only e
 origin, so there is no cross-origin request to authorize. Still make it env-driven rather than
 leaving localhost hardcoded — and never "fix" it with `allow_origins=["*"]`.
 
-### 3. `neo4j+ssc://` disables TLS certificate verification
+### 3. `neo4j+ssc://` disables TLS certificate verification — confirmed local-only, root cause found
 
-`.env.example` uses `neo4j+ssc://` with a comment noting it works around a local network/TLS issue.
-`ssc` = "self-signed certificate" — it encrypts but does not verify the server identity, so it is
-vulnerable to man-in-the-middle. Use `neo4j+s://` in all cloud environments. If it fails there,
-that is a real problem to diagnose, not to work around.
+`ssc` = "self-signed certificate" — it encrypts but does not verify the server identity, vulnerable
+to man-in-the-middle. **Use `neo4j+s://` in every cloud environment. Never put `+ssc://` in a cloud
+secret store — this is a local development machine's environment variable only.**
+
+Root cause confirmed 2026-09-17: switching this machine's `.env` to `neo4j+s://` failed with
+`ServiceUnavailable: Unable to retrieve routing information`. `openssl s_client` showed Aura's
+certificate chain as genuinely valid (SSL.com, correctly signed). But Python's own `ssl` module
+against the same host failed with `CERTIFICATE_VERIFY_FAILED: self-signed certificate in
+certificate chain` — a mismatch between what OS-level tools trust and what Python's independent
+trust bundle trusts. That signature means **local TLS inspection**: something on this machine
+(antivirus, a corporate/ISP proxy) is intercepting TLS and re-signing it with its own root, which
+is silently trusted by Windows but correctly rejected by Python. This is a property of the local
+network, not of Aura or of this codebase — it should not occur inside a cloud container.
+
+**Consequence for setup:** the local `.env` on this machine legitimately needs `+ssc://` to run the
+backend at all. When staging `NEO4J_URI` into a cloud secret store (Phase 0 step 4), **use
+`+s://`, not whatever is currently in this machine's `.env`** — do not copy the local value
+verbatim. If `+s://` ever fails inside an actual deployed container, that is a real problem worth
+diagnosing (per the original guidance above), since the local-network cause won't be present there.
 
 ### 4. Schema creation runs at import time
 

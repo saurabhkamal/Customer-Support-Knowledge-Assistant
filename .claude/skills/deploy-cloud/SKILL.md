@@ -1,6 +1,6 @@
 ---
 name: deploy-cloud
-description: Deploy the cska Customer Support Knowledge Assistant (FastAPI backend + Next.js frontend) to AWS, Azure, or GCP using Terraform and container images. Use when asked to deploy, provision infrastructure, set up CI/CD, roll back a release, or troubleshoot a cloud environment for this project. Covers ECS Fargate/ALB, Azure Container Apps, and Cloud Run, plus GitHub Actions OIDC.
+description: Deploy the cska Customer Support Knowledge Assistant (FastAPI backend + Next.js frontend) to AWS, Azure, or GCP using Terraform and container images. Use when asked to deploy, provision infrastructure, set up CI/CD, roll back a release, or troubleshoot a cloud environment for this project. Covers AWS App Runner, Azure Container Apps, and Cloud Run, plus GitHub Actions OIDC.
 ---
 
 # Deploying cska to AWS, Azure, or GCP
@@ -124,27 +124,35 @@ Remote state, separate per cloud and per environment, per rule §5. Run `init` �
 
 In `dev`, apply if the plan is clean. In `prod`, present the plan summary and cost delta, then wait.
 
-### AWS — ECS Fargate + ALB
+### AWS — App Runner
 
-Chosen over App Runner because the ALB reproduces nginx's path routing natively (`/api/*` → backend
-target group, `/*` → frontend), keeping one public entry point. App Runner is one service per
-endpoint and would need CloudFront in front to route paths, which is more moving parts, not fewer.
+Chosen over ECS Fargate + ALB specifically **because this deployment is temporary** (stood up to
+demo, then torn down) — see the note in project memory on deployment purpose. ECS + ALB cannot
+scale to zero: the ALB alone bills a fixed ~$17–22/mo whether or not anyone is looking at it, and
+Fargate tasks bill continuously. App Runner bills per-request with idle-cheap billing, which suits
+something that runs for a day or two and then gets destroyed. The path-routing the ALB used to
+justify is also now moot — the Next.js proxy already does that routing, so the ALB would only be
+providing TLS, which App Runner provides natively anyway.
 
 - **ECR** — two repos, scan-on-push on, lifecycle policy to expire untagged images.
-- **VPC** — 2 AZs. Public subnets for the ALB only. **Cost note:** private subnets require a NAT
-  gateway (~$32/mo each) for ECR/OpenAI egress. In `dev`, put tasks in public subnets with
-  `assign_public_ip` and no inbound security group rule — same isolation, no NAT bill. In `prod`,
-  use private subnets + a single NAT, or VPC endpoints for ECR/S3/Logs.
-- **ECS Fargate** — one service per component. Backend security group accepts traffic **only** from
-  the frontend's security group on 8000. Not from the ALB, not from the VPC CIDR.
-- **ALB** — HTTPS:443 via ACM, HTTP:80 redirecting to 443. Only the frontend target group is
-  reachable from the internet.
-- **Secrets Manager** — injected via the task definition's `secrets` block, which places them in the
-  environment at start without ever putting them in the task definition JSON.
-- **Health check** — target group path `/health`, with a startup grace period generous enough for
-  `create_all` to reach Postgres on cold start (Known Issue #5). Too short and the task is killed
-  mid-startup and crash-loops.
-- **CloudWatch Logs** — `awslogs` driver, retention set (default is never-expire, which bills forever).
+- **Backend service** — private ingress via a **VPC ingress connection**, reachable only from
+  inside the VPC — not from the public internet. This is the App Runner equivalent of Cloud Run's
+  `--ingress internal` / Container Apps' `ingress.external = false`.
+- **Frontend service** — public ingress (App Runner's default), calls the backend over the VPC
+  ingress connection using its private endpoint URL as `BACKEND_URL`.
+- **Networking** — App Runner needs a VPC connector to reach the backend's private ingress and to
+  reach Secrets Manager via VPC endpoint if avoiding public egress; in `dev`, public egress
+  (App Runner's default outbound path) to Supabase/Neo4j/OpenAI is fine and avoids a NAT gateway
+  entirely — there is no NAT bill on this path, which is a real cost advantage over the ECS design.
+- **Secrets Manager** — referenced in each service's runtime environment secrets configuration,
+  never baked into the image or the `apprunner.yaml`.
+- **Health check** — App Runner's built-in health check on `/health`, with a startup grace period
+  generous enough for `create_all` to reach Postgres on cold start (Known Issue #4 in CLAUDE.md).
+  Too short and the instance is recycled mid-startup and crash-loops.
+- **Auto scaling configuration** — set max size explicitly; App Runner's concurrency-based scaling
+  still needs an upper bound so a traffic spike (or a bug) can't scale unboundedly.
+- **CloudWatch Logs** — App Runner ships logs there automatically; set retention (default is
+  never-expire, which bills forever).
 
 ### Azure — Container Apps
 
@@ -227,7 +235,7 @@ that gate is the enforcement of rule §3, so it is not optional.
 Know the previous revision before deploying. All three platforms roll back by pointing at the
 prior immutable revision — which only works because images are tagged by digest, not `:latest`.
 
-- **AWS** — re-register/roll to the previous task definition revision and update the service.
+- **AWS** — `aws apprunner update-service` back to the previous image digest/tag.
 - **Azure** — `az containerapp revision activate` on the prior revision; deactivate the bad one.
 - **GCP** — `gcloud run services update-traffic --to-revisions=<prev>=100`.
 
