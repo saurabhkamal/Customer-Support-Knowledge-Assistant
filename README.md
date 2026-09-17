@@ -2,6 +2,18 @@
 
 A Graph RAG (Retrieval-Augmented Generation) system for customer support, combining structured relational data, a knowledge graph, and semantic vector search to answer support questions with grounded, sourced answers.
 
+## 🔗 Live Demo
+
+**https://meeh3bwyk2.ap-northeast-1.awsapprunner.com**
+
+Running on AWS App Runner in `ap-northeast-1` (Tokyo). The app sits behind a login screen —
+credentials are shared separately, not published here.
+
+> **Note for learners:** this is a temporary demo environment, deliberately torn down after each
+> session to avoid running up cloud costs. If the link doesn't respond, the infrastructure has been
+> destroyed — that's intentional, not a fault. Everything needed to stand it back up lives in
+> [`infra/aws/dev/`](infra/aws/dev/).
+
 ## Architecture
 
 ```mermaid
@@ -22,25 +34,62 @@ flowchart TD
 
 ## Cloud Deployment (AWS)
 
-This app also deploys to AWS App Runner as two independent services — stood up temporarily for
-demos, then torn down. The Docker-Compose/nginx layout above is a local-only convenience; every
-cloud target provides its own ingress and TLS, so nginx isn't part of the cloud shape.
+Deployed as **two independent App Runner services** in `ap-northeast-1`, defined entirely in
+Terraform under [`infra/aws/dev/`](infra/aws/dev/). The Docker-Compose/nginx layout above is a
+local-only convenience — App Runner provides its own ingress and TLS, so nginx isn't part of the
+cloud shape.
 
 ```mermaid
 flowchart TD
-    Internet((Internet)) --> FrontendSvc["App Runner: frontend<br/>public ingress<br/>proxy.ts login gate + /api/* proxy"]
-    FrontendSvc -->|"VPC ingress connection<br/>X-API-Key attached server-side"| BackendSvc["App Runner: backend<br/>private ingress only<br/>never reachable from the internet"]
-    BackendSvc --> Postgres[("Supabase Postgres<br/>ap-northeast-1")]
-    BackendSvc --> Neo4j[("Neo4j Aura")]
-    BackendSvc --> OpenAI["OpenAI API"]
-    BackendSvc -.->|"reads at startup"| Secrets[("AWS Secrets Manager<br/>cska/dev/*")]
-    FrontendSvc -.->|"reads at startup"| Secrets
+    Learner((Learner<br/>browser)) -->|HTTPS| FrontendSvc
+
+    subgraph AWS["AWS · ap-northeast-1"]
+        FrontendSvc["<b>App Runner: cska-dev-frontend</b><br/>PUBLIC ingress · Next.js :3000<br/>proxy.ts login gate on every route<br/>/api/* proxied server-side"]
+
+        subgraph VPC["VPC 10.0.0.0/16 · no internet gateway"]
+            Connector["VPC Connector<br/>(frontend egress)"]
+            Endpoint["Interface VPC Endpoint<br/>com.amazonaws...apprunner.requests"]
+        end
+
+        BackendSvc["<b>App Runner: cska-dev-backend</b><br/>PRIVATE ingress only · FastAPI :8000<br/>not reachable from the internet"]
+        Secrets[("AWS Secrets Manager<br/>cska/dev/* · 9 secrets")]
+        ECR[("ECR<br/>images tagged by commit SHA")]
+    end
+
+    FrontendSvc --> Connector
+    Connector --> Endpoint
+    Endpoint -->|"X-API-Key attached server-side<br/>browser never holds it"| BackendSvc
+
+    BackendSvc --> Postgres[("Supabase Postgres<br/>+ pgvector · external")]
+    BackendSvc --> Neo4j[("Neo4j Aura · external")]
+    BackendSvc --> OpenAI["OpenAI API · external"]
+
+    Secrets -.->|injected at startup| FrontendSvc
+    Secrets -.->|injected at startup| BackendSvc
+    ECR -.->|image pull| FrontendSvc
+    ECR -.->|image pull| BackendSvc
 ```
 
-App Runner (not ECS+ALB) was chosen specifically because this environment is temporary — it avoids
-a fixed load-balancer cost that would bill even while idle. Full deployment procedure, cost
-reasoning, and safety rules live in `.claude/skills/deploy-cloud/SKILL.md` and
-`.claude/rules/cloud-deployment.md`.
+**Why it's shaped this way:**
+
+- **App Runner, not ECS + ALB** — this environment is temporary, and an ALB bills a fixed ~$17/month
+  even while completely idle. App Runner has no such fixed floor.
+- **The backend has no public route at all.** Its App Runner service is created with
+  `is_publicly_accessible = false`; the only path to it is the VPC interface endpoint, reachable
+  solely from the frontend's VPC connector. Verified after every deploy by attempting to reach the
+  backend URL directly from the internet and confirming it fails.
+- **Secret values never enter Terraform state.** They're created out-of-band and referenced by ARN,
+  so no credential is ever written into a state file.
+- **Images are deployed by commit SHA, never `:latest`** — so "what exactly is running?" always has
+  an answer, and rollback is unambiguous.
+
+**Cost note:** the interface VPC endpoint (~$0.01/hr per AZ) costs more than the application
+compute does. It exists purely to keep the backend private. This is a genuine AWS-vs-others
+difference worth knowing: Cloud Run achieves the same isolation with a single flag and no hourly
+charge.
+
+Full deployment procedure, cost reasoning, and safety rules live in
+`.claude/skills/deploy-cloud/SKILL.md` and `.claude/rules/cloud-deployment.md`.
 
 ## Project Flow
 
@@ -224,7 +273,9 @@ Interactive API docs are available at `/docs` when running the backend directly 
 
 ## Roadmap
 
-- [ ] CI/CD pipeline (GitHub Actions)
-- [ ] AWS deployment
+- [x] AWS deployment (App Runner + Terraform, `ap-northeast-1`)
+- [ ] Azure deployment (Container Apps)
+- [ ] GCP deployment (Cloud Run)
+- [ ] CI/CD pipeline (GitHub Actions with OIDC — no long-lived cloud keys)
 - [ ] Database schema diagram
 - [ ] Neo4j graph model documentation
