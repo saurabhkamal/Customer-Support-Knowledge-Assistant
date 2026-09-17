@@ -14,6 +14,36 @@ credentials are shared separately, not published here.
 > destroyed — that's intentional, not a fault. Everything needed to stand it back up lives in
 > [`infra/aws/dev/`](infra/aws/dev/).
 
+## Screenshots
+
+### Sign in
+
+Every route sits behind a login gate. Unauthenticated requests to any page redirect here, and
+requests to `/api/*` get a `401` rather than a redirect — so the API can't be reached by skipping
+the UI.
+
+![Sign in screen](screenshots/01_login.png)
+
+### Graph Explorer
+
+This is the clearest view of what makes the system a *Graph* RAG rather than plain vector search.
+Entering a ticket ID traverses the knowledge graph in Neo4j and renders the whole connected
+subgraph — here, ticket **"Login failure"** links to the customer who raised it, the product it
+concerns, the underlying issue, and the solution that resolved it:
+
+```
+Customer --RAISED--> Ticket --HAS_ISSUE--> Issue --RESOLVED_BY--> Solution
+                        |
+                   RELATED_TO
+                        v
+                     Product
+```
+
+Those same relationships are what `/ask` walks to find a previously-resolved fix, instead of
+relying on document similarity alone.
+
+![Graph Explorer showing a ticket's connected graph](screenshots/02_graph_explorer.png)
+
 ## Architecture
 
 ```mermaid
