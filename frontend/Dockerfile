@@ -24,4 +24,17 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
 EXPOSE 3000
-CMD ["node", "server.js"]
+
+# Next.js standalone's server.js binds with:
+#     const hostname = process.env.HOSTNAME || '0.0.0.0'
+# Container platforms (App Runner, ECS Fargate) inject HOSTNAME at runtime set
+# to the container's internal hostname, which overrides that '0.0.0.0' default
+# and makes the server bind to one interface only. The health probe then can't
+# reach it and the deploy fails with a health-check timeout, even though the
+# app logs "Ready" and looks fine.
+#
+# Assigning HOSTNAME inline in the CMD sets it in the process's own environment
+# at exec time, so it wins regardless of what the platform injected. `exec`
+# keeps node as PID 1 so it still receives SIGTERM for graceful shutdown.
+ENV PORT=3000
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 exec node server.js"]

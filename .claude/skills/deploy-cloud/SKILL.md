@@ -82,6 +82,23 @@ Stop and report if any check fails. Do not proceed on a partial preflight.
 
 ## Phase 1 — Build and push
 
+**Sequencing gap, discovered running this for real:** this phase pushes to a registry, but the
+registry doesn't exist yet — Phase 2 (Terraform) is what normally creates it, and Terraform hasn't
+run yet at this point. Create the ECR repos out-of-band via CLI first, same reasoning as staging
+secrets out-of-band in Phase 0: a lightweight resource Terraform can reference later rather than
+manage from scratch, so its creation doesn't depend on Terraform already existing.
+
+```bash
+for repo in cska-<env>-backend cska-<env>-frontend; do
+  aws ecr create-repository --repository-name "$repo" --region <region> --profile <profile> \
+    --image-scanning-configuration scanOnPush=true \
+    --tags Key=project,Value=cska Key=env,Value=<env>
+done
+```
+
+Set a lifecycle policy on each (expire untagged images after a few days — buildx pushes an
+untagged attestation/manifest-list image alongside every tagged push, so these accumulate).
+
 ```bash
 TAG=$(git rev-parse --short HEAD)
 ```
@@ -103,6 +120,13 @@ Before pushing, confirm the image does not contain `.env`:
 ```bash
 docker run --rm <registry>/cska-backend:$TAG ls -a /app | grep -i '^\.env$' && echo "LEAK — do not push"
 ```
+
+**On Windows Git Bash specifically:** the shell silently rewrites a leading `/app` into a Windows
+path (`C:/Program Files/Git/app`) before Docker ever sees it, so the command above runs against a
+path that doesn't exist inside the container, fails, and the `&&` never fires — reading as "clean"
+when nothing was actually checked. Prefix with `MSYS_NO_PATHCONV=1` or use `//app` (doubled
+leading slash) to stop the rewrite, and confirm the `ls` output actually lists real files before
+trusting a "clean" result.
 
 Push, then capture the immutable digest (`@sha256:...`) and deploy by digest.
 

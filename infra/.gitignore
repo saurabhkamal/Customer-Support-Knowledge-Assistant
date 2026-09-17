@@ -1,0 +1,25 @@
+# Terraform working files — never commit these.
+#
+# .terraform/ holds downloaded provider binaries (the AWS provider alone is
+# ~675MB, well over GitHub's 100MB per-file limit — committing it fails the
+# push outright).
+.terraform/
+
+# Saved plan files can embed resolved values of sensitive inputs.
+tfplan
+*.tfplan
+
+# State must never be committed: it lives in S3 (see versions.tf) and can
+# contain plaintext secret values for any resource Terraform manages.
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+
+# Local variable files often hold real credentials.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Crash logs can contain state fragments.
+crash.log
+crash.*.log
