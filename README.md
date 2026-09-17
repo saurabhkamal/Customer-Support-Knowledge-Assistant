@@ -7,17 +7,40 @@ A Graph RAG (Retrieval-Augmented Generation) system for customer support, combin
 ```mermaid
 flowchart TD
     Browser[Browser] --> Nginx[nginx :80]
-    Nginx -->|"/"| Frontend["Frontend<br/>Next.js :3000"]
-    Nginx -->|"/api/"| Backend["Backend<br/>FastAPI :8000"]
+    Nginx --> Frontend["Frontend — Next.js :3000<br/>proxy.ts: login gate on every route<br/>app/api/[...path]: server-side backend proxy"]
+    Frontend -->|"X-API-Key attached server-side<br/>browser never sees it"| Backend["Backend<br/>FastAPI :8000<br/>not reachable from nginx directly"]
     Backend --> Postgres[("Supabase Postgres<br/>+ pgvector<br/>cloud, external")]
     Backend --> Neo4j[("Neo4j Aura<br/>cloud, external")]
     Backend --> OpenAI["OpenAI API<br/>embeddings + chat<br/>external"]
 ```
 
 **Design notes:**
-- nginx is the single public entry point; `frontend` and `backend` are not directly reachable from outside the Docker network.
+- nginx routes everything to the frontend — it does **not** route to the backend. The frontend's own server-side proxy is the only thing that ever calls the backend, and it attaches the API key itself; the browser never holds it.
+- Every page and every `/api/*` call passes through `proxy.ts` first, which requires a valid signed-in session cookie — there is a login screen in front of the whole app.
 - Postgres (Supabase) and Neo4j (Aura) are fully managed cloud services — not containerized locally.
 - The backend is the only component that talks to the databases and OpenAI; the frontend only ever calls the backend's API.
+
+## Cloud Deployment (AWS)
+
+This app also deploys to AWS App Runner as two independent services — stood up temporarily for
+demos, then torn down. The Docker-Compose/nginx layout above is a local-only convenience; every
+cloud target provides its own ingress and TLS, so nginx isn't part of the cloud shape.
+
+```mermaid
+flowchart TD
+    Internet((Internet)) --> FrontendSvc["App Runner: frontend<br/>public ingress<br/>proxy.ts login gate + /api/* proxy"]
+    FrontendSvc -->|"VPC ingress connection<br/>X-API-Key attached server-side"| BackendSvc["App Runner: backend<br/>private ingress only<br/>never reachable from the internet"]
+    BackendSvc --> Postgres[("Supabase Postgres<br/>ap-northeast-1")]
+    BackendSvc --> Neo4j[("Neo4j Aura")]
+    BackendSvc --> OpenAI["OpenAI API"]
+    BackendSvc -.->|"reads at startup"| Secrets[("AWS Secrets Manager<br/>cska/dev/*")]
+    FrontendSvc -.->|"reads at startup"| Secrets
+```
+
+App Runner (not ECS+ALB) was chosen specifically because this environment is temporary — it avoids
+a fixed load-balancer cost that would bill even while idle. Full deployment procedure, cost
+reasoning, and safety rules live in `.claude/skills/deploy-cloud/SKILL.md` and
+`.claude/rules/cloud-deployment.md`.
 
 ## Project Flow
 
